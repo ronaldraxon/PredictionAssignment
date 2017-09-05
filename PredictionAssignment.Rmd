@@ -1,0 +1,314 @@
+---
+title: "Prediction Assignment"
+author: "Ronald Rodríguez - ronaldraxon@gmail.com"
+date: "September 09, 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+library(knitr)
+library(caret)
+library(rpart)
+library(rpart.plot)
+library(rattle)
+library(randomForest)
+library(corrplot)
+set.seed(301)
+
+library(dplyr)
+
+library(ggplot2)
+library(utils)
+```
+
+##1. Overview
+
+This document is the final report of the Peer Assessment project from Coursera's course Practical Machine Learning, as part of the Specialization in Data Science. It was built in RStudio, using its knitr functions, meant to be published in html format. This analysis meant to be the basis for the course quiz and a prediction assignment writeup. The main goal of the project is to predict the manner in which 6 participants performed some exercise as described below. This is the "classe" variable in the training set. The machine learning algorithm described here is applied to the 20 test cases available in the test data and the predictions are submitted in appropriate format to the Course Project Prediction Quiz for automated grading.
+
+##2. Background
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement - a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: http://groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset).
+
+##3. Data Loading and Exploratory Analisis
+
+
+```{r data downloading, echo = TRUE, eval=FALSE}
+download.file(
+url="https://d396qusza40orc.cloudfront.net/repdata%2Fdata%2FStormData.csv.bz2",
+destfile= "StormData.csv.bz2", quiet = TRUE)
+
+TrainUrl <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+TestUrl  <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+TrainFile<-"pml-traininig.csv"
+TestFile<-"pml-testing.csv"
+
+# download the datasets
+if(!file.exists(TrainFile))
+{
+    download.file(TrainUrl,destfile = TrainFile)
+}
+training <- read.csv(TrainFile)
+if(!file.exists(TestFile))
+{
+    download.file(TestUrl,destfile = TestFile)
+}
+testing  <- read.csv(TestFile)
+
+# create a partition using caret with the training dataset on 70,30 ratio
+inTrain  <- createDataPartition(training$classe, p=0.7, list=FALSE)
+
+TrainSet <- training[inTrain, ]
+
+TestSet  <- training[-inTrain, ]
+dim(TrainSet)
+```
+
+The download file command is included in the **["utils"][2]** library (Other 
+necesary libraries are listed in the appendix) and it requires the "url"" and 
+destination file name "destfile"(no path is required if you properly set your 
+working directory before), the additinal parameter "quiet" is set to TRUE to 
+suppress status messages, and the progress bar. It will take a couple minutes to 
+download the file (about 48MB) depending on your internet connection. 
+
+First, the data set has to be uncompressed. For this, the read.csv command will be 
+useful, but let's just bring the first 6 row in order to recognize the features.
+
+```{r, echo = TRUE}
+rawStormData <- read.csv("StormData.csv.bz2", header = TRUE, sep = ",", nrows = 6)
+str(rawStormData)
+```
+
+```{r dataLoading}
+rawStormData <- read.csv("StormData.csv.bz2", header = TRUE, sep = ",")
+```
+
+Looks there are some variables that can be useful but its name is not that verbose.
+As it can be seen we can see variable EVTYPE stands for event type and it has 985 
+events. Also fatalities, and injuries could be useful to quantify population 
+health harm. Variables **PROPDMG**, **CROPDMG** stands for property and crop damage 
+respectively. Nevertheles **PROPDMGEXP** and **CROPDMGEXP** seems related to the 
+prior ones. Let's see these levels.
+
+Levels for **PROPDMGEXP**
+```{r levelsProp}
+levels(rawStormData$PROPDMGEXP)
+```
+Levels for **CROPDMGEXP**
+```{r levelsCrop}
+levels(rawStormData$CROPDMGEXP)
+```
+
+Variables **PROPDMGEXP** and **CROPDMGEXP** should be kept in mind as they store 
+the scale for each value in PROPDMG and CROPDMG (e.g millions, billions ). This 
+assumption comes up after reading the **National Weather Service Documentation** 
+especially the **APPENDIX-B**.
+
+```{r , echo=TRUE}
+propDmgs <- select(PROPDMG ,PROPDMGEXP,.data =rawStormData )
+exptfilt <- filter(propDmgs, as.factor(PROPDMGEXP) 
+                   %in% c("-","?","+","1","2","3","4","5","6","7","8","9"))
+summary(exptfilt)
+```
+The numbers of the records with these level factors are no more than 100 and in 
+fact there is no evidence about how exactly these Exponents should be used 
+(either \( x^i \) or  \( x*10^i \)). Then for this excersice these records would 
+be ommited. The same procedure is conducted for **CROPDMG** and **CROPDMGEXP** 
+variables.
+
+```{r}
+propDmgs <- select(CROPDMG ,CROPDMGEXP,.data =rawStormData )
+exptfilt <- filter(propDmgs, as.factor(CROPDMGEXP) 
+                   %in% c("?","1","2","3","4","5","6","7","8","9"))
+summary(exptfilt)
+```
+
+Lets print a summary for the other levels of **PROPDMGEXP**.
+```{r, echo=TRUE}
+propDmgs <- select(PROPDMG ,PROPDMGEXP,.data =rawStormData )
+exptfilt <- filter(propDmgs, as.factor(PROPDMGEXP) 
+                   %in% c("B","h","H","K","m","M"))
+summary(exptfilt)
+```
+
+For the levels "B","h","H","K","m" and "M" would stand for Billion, Hecto, Kilo 
+and Million respectively, then each vale is goint to be multiplied by the 
+respective number being H = 100, K = 1000, M = 1000000, B = 1000000000. Values 
+with non character will be just mutiplied by one. The result data set would be
+as follows:
+ 
+```{r dataCleaning}
+cleanData <- select(EVTYPE,FATALITIES,INJURIES,PROPDMG,PROPDMGEXP,
+                    CROPDMG,CROPDMGEXP,.data=rawStormData)
+cleanData <- filter(cleanData, 
+                    as.factor(PROPDMGEXP) 
+                    %in% c("","B","b","h","H","K","k","M","m"),
+                    as.factor(CROPDMGEXP) 
+                    %in% c("","B","b","h","H","K","k","M","m"))
+cleanData$PROPDE[cleanData$PROPDMGEXP == ""] <- 1
+cleanData$PROPDE[cleanData$PROPDMGEXP %in%  c("h","H")] <- 100
+cleanData$PROPDE[cleanData$PROPDMGEXP %in%  c("K","k")] <- 1000
+cleanData$PROPDE[cleanData$PROPDMGEXP %in%  c("M","m")] <- 1000000
+cleanData$PROPDE[cleanData$PROPDMGEXP %in%  c("B","b")] <- 1000000000
+cleanData$CROPDE[cleanData$CROPDMGEXP == ""] <- 1
+cleanData$CROPDE[cleanData$CROPDMGEXP %in%  c("h","H")] <- 100
+cleanData$CROPDE[cleanData$CROPDMGEXP %in%  c("K","k")] <- 1000
+cleanData$CROPDE[cleanData$CROPDMGEXP %in%  c("M","m")] <- 1000000
+cleanData$CROPDE[cleanData$CROPDMGEXP %in%  c("B","b")] <- 1000000000
+cleanData$PROPDMG <- cleanData$PROPDMG * cleanData$PROPDE
+cleanData$CROPDMG <- cleanData$CROPDMG * cleanData$CROPDE
+cleanData$HEALTHDMG <- cleanData$FATALITIES + cleanData$INJURIES
+cleanData$ECONOMICC <- cleanData$PROPDMG + cleanData$CROPDMG
+cleanData <- select(EVTYPE,FATALITIES,INJURIES,HEALTHDMG,
+                    ECONOMICC,.data=cleanData)
+```
+
+```{r dataHead1}
+kable(head(cleanData),align = 'c')
+```
+
+Where **HEALTHDMG** and **ECONOMICC** stands for health damages and economic 
+consecuentes(USD) respectively.
+
+Now there are around 9 hundred types of event, most of them are related but written
+in different ways. It is necesary to gather them into common groups in order to
+plot their data properly. Storm data event table on page 6 of 
+***[STORM DATA PREPARATION][4]** list the events which this gathering is based on
+The are event types will fall into the following groups:
+
+1. Flood 2. Fire 3. Heat 4. Tornado 5. Rain 6. Storm 6. Wind 7. Heat
+8. Hail 9. Mud slides 10. Other
+
+```{r eventTypeClustering}
+cleanData$EVTYPE <- toupper(cleanData$EVTYPE)
+cleanData$EVTYPE[grep('.*FLOOD.*',cleanData$EVTYPE)] <- "FLOOD"
+cleanData$EVTYPE[grep('.*FIRE.*',cleanData$EVTYPE)] <- "FIRE"
+cleanData$EVTYPE[grep('.*DRY.*',cleanData$EVTYPE)] <- "HEAT"
+cleanData$EVTYPE[grep('.*HIGH.*TEMPER.*',cleanData$EVTYPE)] <- "HEAT"
+cleanData$EVTYPE[grep('.*WARM*',cleanData$EVTYPE)] <- "HEAT"
+cleanData$EVTYPE[grep('.*HEAT*',cleanData$EVTYPE)] <- "HEAT"
+cleanData$EVTYPE[grep('.*HAIL.*',cleanData$EVTYPE)] <- "HAIL"
+cleanData$EVTYPE[grep('.*HURRICANE.*',cleanData$EVTYPE)] <- "HURRICANE"
+cleanData$EVTYPE[grep('.*TORN.*',cleanData$EVTYPE)] <- "TORNADO"
+cleanData$EVTYPE[grep('.*PRECIPITATION.*',cleanData$EVTYPE)] <- "RAIN"
+cleanData$EVTYPE[grep('.*SHOWER.*',cleanData$EVTYPE)] <- "RAIN"
+cleanData$EVTYPE[grep('.*RAIN.*',cleanData$EVTYPE)] <- "RAIN"
+cleanData$EVTYPE[grep('.*LIGHT.*',cleanData$EVTYPE)] <- "STORM"
+cleanData$EVTYPE[grep('.*STORM.*',cleanData$EVTYPE)] <- "STORM"
+cleanData$EVTYPE[grep('.*WINTER*',cleanData$EVTYPE)] <- "SNOW"
+cleanData$EVTYPE[grep('.*SNOW.*',cleanData$EVTYPE)] <- "SNOW"
+cleanData$EVTYPE[grep('.*COLD*',cleanData$EVTYPE)] <- "COLD"
+cleanData$EVTYPE[grep('.*LOW.*TEMPER.*',cleanData$EVTYPE)] <- "COLD"
+cleanData$EVTYPE[grep('.*FROST.*',cleanData$EVTYPE)] <- "COLD"
+cleanData$EVTYPE[grep('.*BLIZZARD.*',cleanData$EVTYPE)] <- "COLD"
+cleanData$EVTYPE[grep('.*WIND.*',cleanData$EVTYPE)] <- "WIND"
+cleanData$EVTYPE[grep('.*SUMMA.*',cleanData$EVTYPE)] <- "OTHER"
+cleanData$EVTYPE[which(!(cleanData$EVTYPE %in% c("FLOOD", "FIRE", "HEAT", "HAIL", 
+                                "HURRICANE", "TORNADO", "RAIN", 
+                                "STORM", "SNOW", "COLD", "WIND", 
+                                "OTHER")))] <- "OTHER"
+
+```
+
+Additionally the data is grouped and set into new variables to get them into the 
+plots as follows:
+
+```{r dataOrdering, echo= TRUE}
+propertyDamageData <- cleanData %>%
+                      group_by(EVTYPE) %>%
+                      summarise(PROPDMG = sum(ECONOMICC)) %>%
+                      arrange(PROPDMG)
+propertyDamageData <- transform(propertyDamageData, 
+                                EVTYPE = reorder(EVTYPE, PROPDMG))
+
+healthDamageData   <- cleanData %>%
+                      group_by(EVTYPE) %>%
+                      summarise(HEALTHDMG = sum(HEALTHDMG)) %>%
+                      arrange(HEALTHDMG)
+healthDamageData <- transform(healthDamageData, 
+                                EVTYPE = reorder(EVTYPE, HEALTHDMG))
+```
+
+##Results
+
+Since 1950 until 2011 Around **USD$ 179.908.359.644** dollars concerns to property 
+and crops repairment for flood damages and total the expenses rise up to 
+**USD$ 47.634.600.000.000.000**.
+
+```{r propertyDamagePlot, fig.align='center',fig.height=4,fig.weight=4}
+p <- ggplot(data=propertyDamageData, aes(x=EVTYPE, y=PROPDMG, fill=EVTYPE)) +
+    geom_bar(stat="identity", show.legend = FALSE) + 
+    ylab("Economic Cost $") + 
+    xlab("Event Type") + 
+    coord_flip() + 
+    ggtitle("Cost For Property And Crop Damages")
+p
+```
+
+Since 1950 until 2011 the public health damages cases caused by tornados  rise 
+to **97.015** and including other causes, a total **155.609** cases.
+
+```{r healthDamagePlot, fig.align='center',fig.height=4,fig.weight=4}
+p <- ggplot(data=healthDamageData, aes(x=EVTYPE, y=HEALTHDMG, fill=EVTYPE)) +
+    geom_bar(stat="identity", show.legend = FALSE) + 
+    ylab("Public health damage cases") + 
+    xlab("Event Type") + 
+    coord_flip() + 
+    ggtitle("Events Affecting Public Health")
+
+p
+```
+
+
+##Appendix
+
+####This code is for the initial set up and required libraries:
+```{r, ref.label=c('setup'),echo=TRUE,eval=FALSE}
+```
+
+####This code is for data downloading (seen previosly):
+```{r, ref.label=c('downloading'),echo=TRUE,eval=FALSE}
+```
+
+####This code is for the data loading into a variable:
+```{r, ref.label=c('dataLoading'),echo=TRUE,eval=FALSE}
+```
+
+####This code is for property damages exp list:
+```{r, ref.label=c('levelsProp'),echo=TRUE,eval=FALSE}
+```
+
+####This code is for property damages exp list:
+```{r, ref.label=c('levelsCrop'),echo=TRUE,eval=FALSE}
+```
+
+####This code is for data cleaning on exp literals:
+```{r, ref.label=c('dataCleaning'),echo=TRUE,eval=FALSE}
+```
+
+####This code is for data preview:
+```{r, ref.label=c('dataHead1'),echo=TRUE,eval=FALSE}
+```
+
+####This code is for event type clustering into commont types:
+```{r, ref.label=c('eventTypeClustering'),echo=TRUE,eval=FALSE}
+```
+
+####Data ordering for plotting (seen previosly):
+```{r, ref.label=c('dataOrdering'),echo=TRUE,eval=FALSE}
+```
+
+####Plot for property damage barchart:
+```{r, ref.label=c('propertyDamagePlot'),echo=TRUE,eval=FALSE}
+```
+
+####Plot for property public health damage barchart:
+```{r, ref.label=c('healthDamagePlot'),echo=TRUE,eval=FALSE}
+```
+
+
+
+
+[1]: https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv
+[2]: https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
+[3]: https://en.wikipedia.org/wiki/Central_limit_theorem
+[4]: https://d396qusza40orc.cloudfront.net/repdata%2Fpeer2_doc%2Fpd01016005curr.pdf
