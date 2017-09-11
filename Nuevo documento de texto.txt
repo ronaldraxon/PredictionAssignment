@@ -1,4 +1,0 @@
-https://rpubs.com/PrjShrestha/predictionwriteup
-https://github.com/acarloto/PML-Prediction-Assignment-Writeup/blob/master/qualitativeActivityRecognition.Rmd
-https://rstudio-pubs-static.s3.amazonaws.com/30176_a4f973081a3041af97c8474d3da707e8.html
-http://benakiva.github.io/practicalML/

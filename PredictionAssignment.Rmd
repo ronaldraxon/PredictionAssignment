@@ -5,14 +5,18 @@ date: "September 09, 2017"
 output: html_document
 ---
 
-```{r setup, include=FALSE}
+```{r setup, include=FALSE,echo = TRUE, eval=TRUE}
 knitr::opts_chunk$set(echo = FALSE)
 library(knitr)
 library(caret)
+library(car)
+library(plyr)
 library(dplyr)
-library(ggplot2)
-library(utils)
-set.seed(301)
+library(gbm)
+library(splines)
+library(survival)
+library(parallel)
+set.seed(123)
 trainingUrl <-"https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
 testingUrl <-"https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
 trainingFile <- "traininig.csv"
@@ -30,48 +34,113 @@ One thing that people regularly do is quantify how much of a particular
 activity they do, but they rarely quantify how well they do it. In this project,
 the goal will be to use data from accelerometers on the belt, forearm, arm, and 
 dumbell of 6 participants and to predict the manner in which 6 participants 
-performed some exercise
+performed any excercise according specification (Class A output) or 
+with different types of errors (Classes B, C, D and E).
 
 ##2. Data Loading
 
-create a partition using caret with the training dataset on 70,30 ratio
+Before creating any training set, let's load the raw data. The data for this 
+project come from this source: [http://groupware.les.inf.puc-rio.br/har.][1] I'd like 
+to thank **Groupware@LES** as they are very kind by sharing the data. Training and
+testing data sets can be found in the following links:
 
-```{r data downloading, echo = TRUE, eval=FALSE}
+[Training set][2],
+[Testing set][3]
+
+```{r data downloading, echo = TRUE, eval=TRUE}
 download.file(url=trainingUrl,destfile= trainingFile, quiet = TRUE)
 download.file(url=testingUrl,destfile= testingFile, quiet = TRUE)
 trainingRawData <- read.csv(trainingFile)
 testingRawData  <- read.csv(testingFile)
-
 ```
 
 ##3. Exploratory Analisis
+
 ###Selecting variables
-```{r select variables, echo = TRUE, eval=FALSE}
+Let's print a summary of the training raw data, so we can have a better idea 
+about how the data should be clean.
+```{r variables summary, echo = TRUE, eval=FALSE}
 summary(trainingRawData)
 ```
-###Cleaning Data
-```{r data clean, echo = TRUE, eval=FALSE}
-summary(trainingRawData)
+
+After checking summary of the data, there are some variables with missing values.
+These variables contains values as deviation and variance among others. Nevertheless
+these values appears at the end of a certain periods. Also there are some variables
+related with the time and the time window the participans perform the exercises, so 
+these values will be ommited. 
+
+In the other hand, variables such a space coordinates, acceleration, gyros measurements
+among others are meant to be used for modeling. Additionally the name of the 
+participant is included and replaced with a number, this is because any individual 
+will perform the excercises differently even they were instructed previously, 
+therefore the measurement would depend on a certain participant. Below there is 
+report were it's shown this theory.
+
+```{r , echo = TRUE, eval=TRUE}
+participantsAMeanData <- filter(
+                          summarise(
+                                select(
+                                group_by(trainingRawData, user_name,classe),
+                                pitch_belt,yaw_belt,total_accel_belt,gyros_belt_x,
+                                gyros_belt_y,gyros_belt_z,classe
+                                ),
+                            m_pitch = mean(pitch_belt,na.rm = TRUE),
+                            m_yaw = mean(yaw_belt,na.rm = TRUE),
+                            m_accel = mean(total_accel_belt,na.rm = TRUE),
+                            m_gyrosX = mean(gyros_belt_x,na.rm = TRUE),
+                            m_gyrosY = mean(gyros_belt_y,na.rm = TRUE),
+                            m_gyrosZ = mean(gyros_belt_z,na.rm = TRUE)
+                            ), 
+                          classe == 'A'
+                        )
+participantsAMeanData
 ```
 
-Anscombe's quartet comprises four datasets that have nearly identical simple descriptive statistics, yet appear very different when graphed. Each dataset consists of eleven (x,y) points. They were constructed in 1973 by the statistician Francis Anscombe to demonstrate both the importance of graphing data before analyzing it and the effect of outliers on statistical properties. He described the article as being intended to counter the impression among statisticians that "numerical calculations are exact, but graphs are rough
+##Cleaning Data
 
-```{r training set , echo = TRUE, eval=FALSE}
-inTrain  <- createDataPartition(trainingRawData$classe, p=0.7, list=FALSE)
-trainSet <- trainingRawData[inTrain, ]
-testSet  <- trainingRawData[-inTrain, ]
+According with the observacions, the name of the participants remains in the sets. 
+```{r removing fields training WNA, echo = TRUE, eval=TRUE}
+trainingData <- trainingRawData[,c(2,9:11,37:45,60:68,113:121,151:160)]
 ```
 
-##Appendix
+```{r removing fields testing WNA, echo = TRUE, eval=TRUE}
+testingData <- testingRawData[,c(2,9:11,37:45,60:68,113:121,151:160)]
+```
 
-####This code is for the initial set up and required libraries:
-```{r, ref.label=c('setup'),echo=TRUE,eval=FALSE}
+##Creating training data set
+
+Once the variables are selected partition using caret with the training dataset 
+on 70,30 ratio is created.
+
+```{r data partition , echo = TRUE, eval=TRUE}
+dataPartition  <- createDataPartition(trainingData$classe, p=0.7, list=FALSE)
+trainSet <- trainingData[dataPartition, ]
+testSet  <- trainingData[-dataPartition, ]
+```
+
+##Training
+
+For this excercise I've selected boosting with trees training, then... 
+```{r model training , echo = TRUE, eval=TRUE}
+model<-train(classe~.,data=trainSet,method='gbm',verbose = F)
+```
+##Verifying training results
+
+```{r prediction 1 , echo = TRUE, eval=TRUE}
+prediction<-predict(model,testSet)
+confusionMatrix(prediction,testSet$classe)
+```
+As we can see the accuracy of the model is around 0.94. Probably it can be enhanced
+with other training algorithms but this is a considerable accuracy. Now lets predict
+the testing set.
+
+```{r prediction 2 , echo = TRUE, eval=TRUE}
+predictionTest<-predict(model,testingData)
+predictionTest
 ```
 
 
 
-
-[1]: https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv
-[2]: https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
-[3]: https://en.wikipedia.org/wiki/Central_limit_theorem
-[4]: https://d396qusza40orc.cloudfront.net/repdata%2Fpeer2_doc%2Fpd01016005curr.pdf
+[1]: http://groupware.les.inf.puc-rio.br/har
+[2]: https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv
+[3]: https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
